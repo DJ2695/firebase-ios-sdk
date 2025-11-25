@@ -1,5 +1,6 @@
 # Unreleased
 - [fixed] Add a mechanism to prevent concurrent token refreshes. (#15474)
+- [fixed] Fix phone MFA verification when using the Auth emulator with app verification disabled for testing (`isAppVerificationDisabledForTesting`). Ensures enrollment and sign-in flows return a verification ID/sessionInfo via unified emulator helper. (#11079)
 
 # 12.2.0
 - [added] Added TOTP support for macOS.
