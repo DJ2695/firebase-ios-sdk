@@ -322,13 +322,8 @@ import Foundation
       -> String? {
       if let settings = auth.settings,
          settings.isAppVerificationDisabledForTesting {
-        let request = SendVerificationCodeRequest(
-          phoneNumber: phoneNumber,
-          codeIdentity: CodeIdentity.empty,
-          requestConfiguration: auth.requestConfiguration
-        )
-        let response = try await auth.backend.call(with: request)
-        return response.verificationID
+        // Emulator flow uses unified helper for MFA/non-MFA
+        return try await sendVerificationCodeForEmulator(phoneNumber: phoneNumber, session: session)
       }
       guard let session else {
         return try await verifyClAndSendVerificationCodeWithRecaptcha(
@@ -391,14 +386,8 @@ import Foundation
       -> String? {
       if let settings = auth.settings,
          settings.isAppVerificationDisabledForTesting {
-        let request = SendVerificationCodeRequest(
-          phoneNumber: phoneNumber,
-          codeIdentity: CodeIdentity.empty,
-          requestConfiguration: auth.requestConfiguration
-        )
-
-        let response = try await auth.backend.call(with: request)
-        return response.verificationID
+        // Emulator flow: bypass app verification and handle both regular and MFA phone auth
+        return try await sendVerificationCodeForEmulator(phoneNumber: phoneNumber, session: session)
       }
       guard let session else {
         // Phone MFA flow
@@ -634,6 +623,50 @@ import Foundation
         components?.fragment = appCheckTokenFragment
       }
       return components?.url
+    }
+
+    /// Sends verification code when using the Firebase emulator with
+    /// `isAppVerificationDisabledForTesting` enabled.
+    /// Handles both regular phone auth and MFA flows.
+    /// - Parameter phoneNumber: The phone number to be verified.
+    /// - Parameter session: The MFA session, if this is an MFA flow. Nil for regular phone auth.
+    /// - Returns: The verification ID or session info from the backend.
+    private func sendVerificationCodeForEmulator(
+      phoneNumber: String,
+      session: MultiFactorSession?
+    ) async throws -> String? {
+      // No MFA session - use basic phone verification (non-MFA flow)
+      guard let session else {
+        let request = SendVerificationCodeRequest(
+          phoneNumber: phoneNumber,
+          codeIdentity: CodeIdentity.empty,
+          requestConfiguration: auth.requestConfiguration
+        )
+        let response = try await auth.backend.call(with: request)
+        return response.verificationID
+      }
+
+      // MFA flow - create request info with empty credentials (emulator doesn't need real credentials)
+      let startMFARequestInfo = AuthProtoStartMFAPhoneRequestInfo(phoneNumber: phoneNumber,
+                                                                  codeIdentity: CodeIdentity.empty)
+
+      // Check if this is MFA enrollment (user adding a second factor) or MFA sign-in (user verifying existing second factor)
+      if let idToken = session.idToken {
+        // MFA Enrollment: User is logged in and adding phone as a second factor
+        let request = StartMFAEnrollmentRequest(idToken: idToken,
+                                                enrollmentInfo: startMFARequestInfo,
+                                                requestConfiguration: auth.requestConfiguration)
+        let response = try await auth.backend.call(with: request)
+        return response.phoneSessionInfo?.sessionInfo
+      } else {
+        // MFA Sign-In: User passed first factor and is now verifying their phone second factor
+        let request = StartMFASignInRequest(MFAPendingCredential: session.mfaPendingCredential,
+                                            MFAEnrollmentID: session.multiFactorInfo?.uid,
+                                            signInInfo: startMFARequestInfo,
+                                            requestConfiguration: auth.requestConfiguration)
+        let response = try await auth.backend.call(with: request)
+        return response.responseInfo.sessionInfo
+      }
     }
 
     private let auth: Auth
